@@ -1,3 +1,4 @@
+cat > Makefile << 'EOF'
 CC      = arm-none-eabi-gcc
 TARGET  = adas_rtos
 QEMU    = qemu-system-arm
@@ -55,3 +56,4 @@ clean:
 	rm -f $(TARGET).elf
 
 .PHONY: all qemu clean
+EOF
