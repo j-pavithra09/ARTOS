@@ -1,342 +1,219 @@
+#!/usr/bin/env python3
 """
 extract_kitti.py
-KITTI Dataset Extraction Script for  ARTOS
+---------------------------------------
+Extract obstacle distances from the KITTI
+LiDAR dataset and generate kitti_trace.h
+for the CERTOX RTOS.
 
-What this does:
-- Reads real radar distance data from KITTI LiDAR files
-- Reads real lane status from KITTI camera/GPS data
-- Generates kitti_trace.h for use in CERTOX C code
-
-How to use:
-1. Download KITTI dataset from cvlibs.net/datasets/kitti
-2. Place dataset folder in same directory as this script
-3. Run: python3 extract_kitti.py
-4. Copy generated kitti_trace.h to ARTOS root folder
-
-Dataset used:
-- Sequence: 2011_09_26_drive_0001
-- Type: City driving, Karlsruhe Germany
-- Citation: Geiger et al. IEEE CVPR 2013
-
+Author : CERTOX Team
 """
 
 import os
-import sys
+import glob
+import numpy as np
 
-# ── Configuration ────────────────────────────────
-KITTI_PATH  = "2011_09_26_drive_0001_sync"
+# -------------------------------------------------
+# Configuration
+# -------------------------------------------------
+
+KITTI_PATH = "../dataset/2011_09_26_drive_0001_sync/velodyne_points/data"
 OUTPUT_FILE = "../kitti_trace.h"
-MAX_FRAMES  = 108
 
-# ── Pre-extracted KITTI values ────────────────────
-# These are real values extracted from KITTI dataset
-# sequence 2011_09_26_drive_0001
-# Original values in cm converted to meters (/10)
+# Maximum frames to process
+MAX_FRAMES = 108
 
-KITTI_DISTANCES = [
-    4.1, 4.1, 4.1, 4.2, 4.2, 4.5,
-    14.7, 14.6, 14.6, 14.3, 13.7, 14.4,
-    13.6, 4.8, 4.6, 4.5, 4.4, 4.3,
-    4.2, 4.2, 4.1, 4.0, 4.0, 4.2,
-    14.3, 14.1, 13.7, 13.8, 4.4, 13.8,
-    13.8, 13.6, 14.7, 14.5, 13.7, 13.5,
-    4.2, 14.2, 14.6, 13.8, 14.4, 14.7,
-    14.2, 14.6, 14.1, 14.4, 14.4, 14.5,
-    14.4, 14.4, 14.6, 13.7, 14.5, 14.6,
-    14.2, 14.7, 14.7, 14.6, 14.7, 14.5,
-    14.0, 14.2, 14.2, 14.3, 14.4, 14.5,
-    14.3, 14.2, 13.6, 14.4, 14.4, 14.6,
-    14.4, 13.8, 14.6, 13.6, 14.3, 14.5,
-    14.5, 14.4, 13.9, 14.2, 14.0, 14.5,
-    13.8, 13.9, 14.6, 14.5, 14.5, 14.5,
-    14.5, 14.4, 14.4, 13.5, 13.7, 14.1,
-    13.9, 13.7, 14.5, 14.4, 13.6, 14.1,
-    14.7, 14.5, 13.9, 14.3, 13.9, 54.5
-]
+# Forward detection region
+MIN_FORWARD = 0.0       # metres
+MAX_FORWARD = 50.0      # metres
+LANE_WIDTH = 1.5        # metres
 
-KITTI_LANES = [
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 0.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 0.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 0.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 0.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    0.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 0.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    0.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0,
-    1.0, 1.0, 1.0
-]
+# Ignore very small distances (noise)
+MIN_DISTANCE = 0.5      # metres
+
+# Safety Zones
+CRITICAL = 6.0
+WARNING = 15.0
 
 
-def try_extract_from_dataset(path):
-    """
-    Try to extract real values from
-    downloaded KITTI dataset files.
-    Returns distances list if successful.
-    Returns None if dataset not found.
-    """
-    try:
-        import numpy as np
-    except ImportError:
-        print("numpy not installed.")
-        print("Run: pip install numpy")
-        return None
+# -------------------------------------------------
+# Read one LiDAR frame
+# -------------------------------------------------
 
-    lidar_path = os.path.join(
-        path, "velodyne_points", "data"
+def process_frame(file_path):
+
+    points = np.fromfile(
+        file_path,
+        dtype=np.float32
+    ).reshape(-1, 4)
+
+    x = points[:, 0]
+    y = points[:, 1]
+
+    mask = (
+        (x > MIN_FORWARD) &
+        (x < MAX_FORWARD) &
+        (np.abs(y) < LANE_WIDTH)
     )
 
-    if not os.path.exists(lidar_path):
-        return None
+    forward_points = points[mask]
 
-    print(f"Found KITTI dataset at: {path}")
-    print("Extracting real LiDAR data...")
+    if len(forward_points) == 0:
+        return MAX_FORWARD
 
-    files = sorted([
-        f for f in os.listdir(lidar_path)
-        if f.endswith('.bin')
-    ])[:MAX_FRAMES]
+    distance = np.min(forward_points[:, 0])
+
+    if distance < MIN_DISTANCE:
+        distance = MIN_DISTANCE
+
+    return round(float(distance), 2)
+
+
+# -------------------------------------------------
+# Extract all frames
+# -------------------------------------------------
+
+def extract_dataset():
+
+    files = sorted(
+        glob.glob(
+            os.path.join(KITTI_PATH, "*.bin")
+        )
+    )
+
+    if len(files) == 0:
+        raise FileNotFoundError(
+            "No KITTI .bin files found."
+        )
+
+    files = files[:MAX_FRAMES]
 
     distances = []
-    for i, fname in enumerate(files):
-        pts = np.fromfile(
-            os.path.join(lidar_path, fname),
-            dtype=np.float32
-        ).reshape(-1, 4)
 
-        front = pts[pts[:, 0] > 0]
-        if len(front) > 0:
-            d = float(np.min(
-                np.sqrt(
-                    front[:, 0] ** 2 +
-                    front[:, 1] ** 2
-                )
-            ))
-            distances.append(round(d, 2))
+    print("-----------------------------------")
+    print("Reading KITTI LiDAR Dataset")
+    print("-----------------------------------")
 
-        if i % 20 == 0:
-            print(f"  Frame {i:3d} / {len(files)}")
+    for i, file in enumerate(files):
+
+        d = process_frame(file)
+        distances.append(d)
+
+        if i % 10 == 0:
+            print(
+                f"Frame {i:03d} -> {d:.2f} m"
+            )
 
     return distances
 
 
-def extract_lanes_from_oxts(path, total):
-    """
-    Extract lane status from KITTI
-    GPS/IMU oxts data using lateral
-    acceleration as lane indicator.
-    """
-    oxts_path = os.path.join(
-        path, "oxts", "data"
-    )
+# -------------------------------------------------
+# Generate Header
+# -------------------------------------------------
 
-    if not os.path.exists(oxts_path):
-        return None
+def generate_header(distances):
 
-    files = sorted([
-        f for f in os.listdir(oxts_path)
-        if f.endswith('.txt')
-    ])[:total]
+    critical = 0
+    warning = 0
+    safe = 0
 
-    lanes = []
-    for fname in files:
-        with open(os.path.join(
-            oxts_path, fname
-        )) as f:
-            vals = f.read().split()
-            # Index 17 = lateral acceleration
-            lat = float(vals[17])
-            # Above 0.5 m/s2 = lane departure
-            lanes.append(
-                0.0 if abs(lat) > 0.5
-                else 1.0
-            )
-    return lanes
+    with open(OUTPUT_FILE, "w") as f:
 
-
-def generate_header(distances, lanes):
-    """
-    Generate kitti_trace.h C header file
-    with all extracted data arrays.
-    """
-    n = min(len(distances),
-            len(lanes), MAX_FRAMES)
-    d = distances[:n]
-    l = lanes[:n]
-
-    with open(OUTPUT_FILE, 'w') as f:
-
-        # Header comment
         f.write("/*\n")
-        f.write(" * kitti_trace.h\n")
-        f.write(" * Auto-generated by"
-                " extract_kitti.py\n")
-        f.write(" *\n")
-        f.write(" * Source: KITTI Autonomous"
-                " Driving Dataset\n")
-        f.write(" * Sequence:"
-                " 2011_09_26_drive_0001\n")
-        f.write(" * Citation: Geiger et al."
-                " IEEE CVPR 2013\n")
-        f.write(" * URL:"
-                " cvlibs.net/datasets/kitti\n")
-        f.write(" *\n")
-        f.write(" * Frames    : "
-                f"{n}\n")
-        f.write(" * Departures: "
-                f"{l.count(0.0)}\n")
-        f.write(" * Critical  : "
-                f"{sum(1 for x in d if x < 6.0)}"
-                "\n")
-        f.write(" * Caution   : "
-                f"{sum(1 for x in d if 6.0 <= x < 15.0)}"
-                "\n")
-        f.write(" * Safe      : "
-                f"{sum(1 for x in d if x >= 15.0)}"
-                "\n")
+        f.write(" * AUTO GENERATED FILE\n")
+        f.write(" * DO NOT EDIT\n")
         f.write(" */\n\n")
 
         f.write("#ifndef KITTI_TRACE_H\n")
         f.write("#define KITTI_TRACE_H\n\n")
 
-        # Frame count
-        f.write(f"#define KITTI_FRAMES {n}\n\n")
+        f.write("#include <stdint.h>\n\n")
 
-        # Zone thresholds
-        f.write("/* Distance zone thresholds"
-                " in meters */\n")
-        f.write("#define KITTI_CRITICAL"
-                "  6.0f\n")
-        f.write("#define KITTI_CAUTION"
-                "  15.0f\n\n")
+        f.write(
+            f"#define KITTI_FRAMES {len(distances)}\n\n"
+        )
 
-        # Distance array
-        f.write("/* Real radar distances from"
-                " KITTI LiDAR (meters) */\n")
-        f.write("/* Below 6m = CRITICAL"
-                "  6-15m = CAUTION"
-                "  Above 15m = SAFE */\n")
-        f.write("static float"
-                " kitti_distances[KITTI_FRAMES]"
-                " = {\n    ")
-        for i, v in enumerate(d):
-            f.write(f"{v:.1f}f")
-            if i < n - 1:
-                f.write(", ")
-            if (i + 1) % 8 == 0 and i < n - 1:
-                f.write("\n    ")
-        f.write("\n};\n\n")
+        f.write(
+            "static const float kitti_distance[] = {\n"
+        )
 
-        # Lane array
-        f.write("/* Real lane status from"
-                " KITTI camera data */\n")
-        f.write("/* 1.0 = Lane OK"
-                "  0.0 = Lane Departure */\n")
-        f.write("static float"
-                " kitti_lanes[KITTI_FRAMES]"
-                " = {\n    ")
-        for i, v in enumerate(l):
-            f.write(f"{v:.1f}f")
-            if i < n - 1:
-                f.write(", ")
-            if (i + 1) % 10 == 0 and i < n - 1:
-                f.write("\n    ")
-        f.write("\n};\n\n")
+        for i, d in enumerate(distances):
 
-        # Index tracker
-        f.write("/* Current frame index */\n")
+            if d < CRITICAL:
+                critical += 1
+            elif d < WARNING:
+                warning += 1
+            else:
+                safe += 1
+
+            f.write(f"    {d:.2f}f")
+
+            if i != len(distances) - 1:
+                f.write(",")
+
+            f.write("\n")
+
+        f.write("};\n\n")
+
         f.write("static int kitti_index = 0;\n\n")
 
-        # Helper functions
-        f.write("/* Get current distance */\n")
-        f.write("static inline float"
-                " kitti_get_distance(void) {\n")
-        f.write("    return kitti_distances"
-                "[kitti_index % KITTI_FRAMES];\n")
-        f.write("}\n\n")
+        f.write(
+"""static inline float kitti_get_distance(void)
+{
+    return kitti_distance[kitti_index];
+}
 
-        f.write("/* Get current lane status */\n")
-        f.write("static inline float"
-                " kitti_get_lane(void) {\n")
-        f.write("    return kitti_lanes"
-                "[kitti_index % KITTI_FRAMES];\n")
-        f.write("}\n\n")
+static inline void kitti_next_frame(void)
+{
+    kitti_index++;
 
-        f.write("/* Advance to next frame */\n")
-        f.write("static inline void"
-                " kitti_advance(void) {\n")
-        f.write("    kitti_index = "
-                "(kitti_index + 1)"
-                " % KITTI_FRAMES;\n")
-        f.write("}\n\n")
+    if(kitti_index >= KITTI_FRAMES)
+        kitti_index = 0;
+}
 
-        f.write("/* Reset to first frame */\n")
-        f.write("static inline void"
-                " kitti_reset(void) {\n")
-        f.write("    kitti_index = 0;\n")
-        f.write("}\n\n")
+static inline void kitti_reset(void)
+{
+    kitti_index = 0;
+}
+"""
+)
 
-        f.write("#endif /* KITTI_TRACE_H */\n")
+        f.write("\n#endif\n")
 
-    print(f"\nGenerated: {OUTPUT_FILE}")
-    print(f"Frames    : {n}")
-    print(f"Critical  :"
-          f" {sum(1 for x in d if x < 6.0)}"
-          f" frames below 6m")
-    print(f"Caution   :"
-          f" {sum(1 for x in d if 6<=x<15)}"
-          f" frames 6-15m")
-    print(f"Safe      :"
-          f" {sum(1 for x in d if x >= 15)}"
-          f" frames above 15m")
-    print(f"Departures:"
-          f" {l.count(0.0)} lane events")
+    print("\nHeader generated successfully!\n")
 
+    print("----------------------------")
+    print("Statistics")
+    print("----------------------------")
+
+    print("Frames      :", len(distances))
+    print("Critical    :", critical)
+    print("Warning     :", warning)
+    print("Safe        :", safe)
+
+    print("Minimum     :", min(distances), "m")
+    print("Maximum     :", max(distances), "m")
+    print(
+        "Average     :",
+        round(sum(distances) / len(distances), 2),
+        "m"
+    )
+
+
+# -------------------------------------------------
+# Main
+# -------------------------------------------------
 
 def main():
-    print("=" * 45)
-    print("CERTOX RTOS — KITTI Data Extractor")
-    print("=" * 45)
 
-    distances = None
-    lanes     = None
+    print("\nCERTOX KITTI Extractor\n")
 
-    # Try real dataset first
-    if os.path.exists(KITTI_PATH):
-        distances = try_extract_from_dataset(
-            KITTI_PATH
-        )
-        if distances:
-            lanes = extract_lanes_from_oxts(
-                KITTI_PATH, len(distances)
-            )
+    distances = extract_dataset()
 
-    # Fall back to pre-extracted values
-    if not distances:
-        print("\nUsing pre-extracted KITTI"
-              " values from")
-        print(f"sequence 2011_09_26_drive_0001")
-        distances = KITTI_DISTANCES
+    generate_header(distances)
 
-    if not lanes:
-        lanes = KITTI_LANES
-
-    # Generate header file
-    generate_header(distances, lanes)
-    print("\nDone! kitti_trace.h is ready.")
-    print("It is already updated in ARTOS/")
+    print("\nDone.")
+    print("Generated:", OUTPUT_FILE)
 
 
 if __name__ == "__main__":
