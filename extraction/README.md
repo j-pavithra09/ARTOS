@@ -160,7 +160,7 @@ Continue normal driving.
 
 # Example Output
 
-CERTOX KITTI Extractor
+ARTOS KITTI Extractor
 
 Reading KITTI Dataset...
 
