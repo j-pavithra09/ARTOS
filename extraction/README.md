@@ -29,7 +29,7 @@ Sensors Used
 
 # Folder Structure
 
-CERTOX/
+ARTOS/
 
 ├── dataset/
 │   └── 2011_09_26_drive_0001_sync/
@@ -120,7 +120,7 @@ which contains
 
 ---
 
-# Using in CERTOX
+# Using in ARTOS
 
 Include
 
@@ -160,7 +160,7 @@ Continue normal driving.
 
 # Example Output
 
-CERTOX KITTI Extractor
+ARTOS KITTI Extractor
 
 Reading KITTI Dataset...
 
@@ -185,17 +185,5 @@ Safe : 33
 Generated:
 kitti_trace.h
 
----
-
-# Citation
-
-A. Geiger,
-P. Lenz,
-R. Urtasun,
-
-"Are We Ready for Autonomous Driving?
-The KITTI Vision Benchmark Suite,"
-
-IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2012.
 
 ---
