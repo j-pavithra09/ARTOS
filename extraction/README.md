@@ -29,7 +29,7 @@ Sensors Used
 
 # Folder Structure
 
-CERTOX/
+ARTOS/
 
 ├── dataset/
 │   └── 2011_09_26_drive_0001_sync/
@@ -120,7 +120,7 @@ which contains
 
 ---
 
-# Using in CERTOX
+# Using in ARTOS
 
 Include
 
